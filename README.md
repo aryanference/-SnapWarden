@@ -2,29 +2,29 @@
 
 **Automated Multi-Region EBS Snapshot Lifecycle Management on AWS**
 
-*Formerly ebs-guardian*
-
 ---
 
 ## Overview
 
-ebs-guardian is a production-grade, serverless backup automation system for Amazon EBS volumes. It combines AWS Lambda, EventBridge, SNS, and Terraform to deliver a fully hands-off snapshot lifecycle — from creation through retention enforcement and automated cleanup — across every active region in your AWS account.
+SnapWarden is a production-grade, serverless backup automation system for Amazon EBS volumes. It combines AWS Lambda, EventBridge, SNS, and Terraform to deliver a fully hands-off snapshot lifecycle — from creation through retention enforcement and automated cleanup — across every active region in your AWS account.
 
 Designed as a Site Reliability Engineering portfolio project, it demonstrates the operational disciplines of infrastructure automation, least-privilege security, observability, and day-2 lifecycle management at scale.
 
 ---
 
-## What It Does
+## Architecture
 
-On every scheduled run, ebs-guardian performs two coordinated operations:
+![SnapWarden System Architecture — Terraform provisions Lambda, EventBridge schedules execution, Lambda creates EBS snapshots and publishes results to SNS](https://raw.githubusercontent.com/aryanference/-SnapWarden/master/IMAGES/1.00.png)
+
+On every scheduled run, SnapWarden performs three coordinated operations across all active AWS regions:
 
 **1. Multi-Region Snapshot Creation**
 
-The Lambda function queries every opted-in AWS region for EC2 volumes tagged with the configured backup tag (`Snapshot=true` by default). For each qualifying volume it creates a point-in-time EBS snapshot, tagging every snapshot with metadata for traceability: source region, volume ID, creation date, and the `ManagedBy: ebs-guardian` marker used by retention enforcement.
+The Lambda function queries every opted-in AWS region for EC2 volumes tagged with the configured backup tag (`Snapshot=true` by default). For each qualifying volume it creates a point-in-time EBS snapshot, tagging every snapshot with metadata for traceability: source region, volume ID, creation date, and the `ManagedBy: snapwarden` marker used by retention enforcement.
 
 **2. Retention-Based Snapshot Purge**
 
-After creating new snapshots, ebs-guardian scans all regions for snapshots it manages and deletes those older than the configured retention window (default: 7 days). This closes the lifecycle loop and prevents unbounded storage cost accumulation.
+After creating new snapshots, SnapWarden scans all regions for snapshots it manages and deletes those older than the configured retention window (default: 7 days). This closes the lifecycle loop and prevents unbounded storage cost accumulation.
 
 **3. Structured Execution Report**
 
@@ -32,26 +32,9 @@ A structured report summarising snapshots created, snapshots purged, and any per
 
 ---
 
-## Architecture
+## Infrastructure Components
 
-```
-                    EventBridge Rule
-                    (cron schedule)
-                          |
-                          v
-                   AWS Lambda (Python 3.12)
-                   [SnapWarden]
-                          |
-            +-------------+-------------+
-            |                           |
-            v                           v
-   All Active AWS Regions        Amazon SNS Topic
-   - Describe Volumes            - Execution report
-   - Create Snapshots            - Email notification
-   - Purge Expired Snapshots
-```
-
-**Infrastructure components managed by Terraform:**
+**Managed by Terraform:**
 
 | Component | Purpose |
 |---|---|
@@ -66,7 +49,7 @@ A structured report summarising snapshots created, snapshots purged, and any per
 ## Project Structure
 
 ```
-ebs-guardian/
+SnapWarden/
 ├── lambda_function.py          # Multi-region snapshot creation + retention enforcement
 └── terraform/
     ├── main.tf                 # All AWS resource definitions
@@ -86,7 +69,7 @@ ebs-guardian/
 - **Structured execution reports** — per-region breakdown of create/purge counts and errors via SNS
 - **CloudWatch Logs integration** — structured log output with explicit retention policy
 - **Fully serverless** — zero idle compute cost; Lambda executes only on schedule
-- **Tagged resource management** — every managed snapshot is tagged with `ManagedBy: ebs-guardian` for deterministic lifecycle tracking
+- **Tagged resource management** — every managed snapshot is tagged with `ManagedBy: snapwarden` for deterministic lifecycle tracking
 
 ---
 
@@ -162,6 +145,56 @@ Value: true
 
 ---
 
+## Deployed Resources
+
+### IAM — Lambda Execution Role
+
+The Lambda function runs under a least-privilege IAM role scoped to only the EC2 and SNS actions required. No `AdministratorAccess` or broad AWS managed policies are used.
+
+![IAM Roles view showing the lambda-ebs-snapshot-role created by Terraform](https://raw.githubusercontent.com/aryanference/-SnapWarden/master/IMAGES/Screenshot%202025-06-17%20180133.png)
+
+---
+
+### Lambda — Deployed Function
+
+The function is deployed as a Python 3.12 Zip package. Runtime is 300 seconds with 256 MB memory, appropriate for multi-region iteration.
+
+![AWS Lambda console showing the deployed ebs_snapshot_backup function](https://raw.githubusercontent.com/aryanference/-SnapWarden/master/IMAGES/Screenshot%202025-06-17%20180156.png)
+
+---
+
+### Lambda — Trigger Configuration
+
+EventBridge (CloudWatch Events) is wired as the sole trigger. The function overview confirms the scheduled invocation path.
+
+![Lambda function overview showing EventBridge trigger connected to the function](https://raw.githubusercontent.com/aryanference/-SnapWarden/master/IMAGES/Screenshot%202025-06-17%20180206.png)
+
+---
+
+### Amazon SNS — Alert Topic
+
+A standard SNS topic receives the post-run execution report and delivers it to the subscribed email address.
+
+![Amazon SNS console showing the ebs-snapshot-topic with its ARN](https://raw.githubusercontent.com/aryanference/-SnapWarden/master/IMAGES/Screenshot%202025-06-17%20180234.png)
+
+---
+
+### Amazon EventBridge — Scheduling Rule
+
+The `daily-snapshot-rule` is set to `Enabled` status and configured with a cron schedule. This is what drives the zero-touch daily execution.
+
+![Amazon EventBridge Rules page showing the daily-snapshot-rule in Enabled state](https://raw.githubusercontent.com/aryanference/-SnapWarden/master/IMAGES/Screenshot%202025-06-17%20180504.png)
+
+---
+
+### CloudWatch — Observability
+
+All Lambda executions are captured in CloudWatch. Metrics across EBS (283), EC2 (716), Lambda (17), and Logs (5) namespaces are available for building operational dashboards.
+
+![CloudWatch Metrics explorer showing available namespaces including EBS, EC2, Lambda, and Logs](https://raw.githubusercontent.com/aryanference/-SnapWarden/master/IMAGES/Screenshot%202025-06-17%20180353.png)
+
+---
+
 ## Configuration Reference
 
 | Variable | Default | Description |
@@ -183,7 +216,7 @@ After deployment, verify the following:
 | Check | Where |
 |---|---|
 | Lambda execution | AWS Console > Lambda > Monitor > CloudWatch Logs |
-| Snapshot creation | AWS Console > EC2 > Snapshots (filter by `ManagedBy: ebs-guardian`) |
+| Snapshot creation | AWS Console > EC2 > Snapshots (filter by `ManagedBy: snapwarden`) |
 | Retention purge | Lambda logs — look for `Purged expired snapshot` entries |
 | Execution report | Inbox for `notification_email` |
 | EventBridge rule | AWS Console > EventBridge > Rules — confirm rule is `Enabled` |
