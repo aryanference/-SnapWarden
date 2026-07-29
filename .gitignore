@@ -1,0 +1,13 @@
+# Terraform state — never commit these
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+
+# Lambda build artifact — generated locally
+terraform/lambda_function.zip
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
